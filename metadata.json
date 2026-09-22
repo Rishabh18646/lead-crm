@@ -1,0 +1,8 @@
+{
+  "name": "LeadPulse - LinkedIn Lead Gen & CRM",
+  "description": "Lead generation CRM with LinkedIn contact extraction (mobile, email, job history), duplicate detection, automated outreach sequences, performance analytics, and browser extension.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
