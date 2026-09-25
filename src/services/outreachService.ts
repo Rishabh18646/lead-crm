@@ -48,22 +48,23 @@ export function generateAiIcebreaker(lead: Lead, tone: 'executive' | 'concise' |
 export function advanceLeadInSequence(
   lead: Lead,
   step: SequenceStep,
-  sequenceName: string
+  sequenceName: string,
+  totalSteps: number
 ): { updatedLead: Lead; log: OutreachLog } {
-  const nextStepOrder = step.order + 1;
-  const isLast = nextStepOrder > 4;
+  const isLast = step.order >= totalSteps;
 
   const updatedLead: Lead = {
     ...lead,
     stage: 'in_sequence',
-    sequenceStep: nextStepOrder,
+    // Stay on the final step once the cadence is finished
+    sequenceStep: isLast ? totalSteps : step.order + 1,
     sequenceStatus: isLast ? 'completed' : 'active',
     lastContactedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
   const log: OutreachLog = {
-    id: `log-${Date.now()}`,
+    id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     leadId: lead.id,
     leadName: lead.fullName,
     sequenceId: lead.sequenceId || 'seq-1',

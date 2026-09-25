@@ -246,7 +246,7 @@ export const SequenceManager: React.FC<SequenceManagerProps> = ({
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-800">
-                          Step {lead.sequenceStep || 1}/4
+                          Step {lead.sequenceStep || 1}/{currentSequence.steps.length}
                         </span>
                         <button
                           onClick={() => onAdvanceLeadInSequence(lead.id)}

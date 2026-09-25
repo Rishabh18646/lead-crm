@@ -28,14 +28,16 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   logs
 }) => {
   const totalLeads = leads.length;
-  const leadsWithMobile = leads.filter(l => !!l.phone).length;
+  const leadsWithMobile = leads.filter(l => !!l.mobilePhone || (l.phoneType === 'mobile' && !!l.phone)).length;
   const mobileEnrichmentRate = totalLeads > 0 ? Math.round((leadsWithMobile / totalLeads) * 100) : 0;
   const leadsWithEmail = leads.filter(l => l.emailStatus === 'verified').length;
   const emailVerificationRate = totalLeads > 0 ? Math.round((leadsWithEmail / totalLeads) * 100) : 0;
 
   const totalMeetings = sequences.reduce((acc, s) => acc + s.meetingCount, 0);
-  const avgOpenRate = (sequences.reduce((acc, s) => acc + s.openRate, 0) / sequences.length).toFixed(1);
-  const avgReplyRate = (sequences.reduce((acc, s) => acc + s.replyRate, 0) / sequences.length).toFixed(1);
+  // Guard against 0 sequences, which would render "NaN%"
+  const seqCount = sequences.length || 1;
+  const avgOpenRate = (sequences.reduce((acc, s) => acc + s.openRate, 0) / seqCount).toFixed(1);
+  const avgReplyRate = (sequences.reduce((acc, s) => acc + s.replyRate, 0) / seqCount).toFixed(1);
 
   // Conversion funnel steps
   const funnelSteps = [

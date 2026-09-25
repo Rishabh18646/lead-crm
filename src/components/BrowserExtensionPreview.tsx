@@ -86,16 +86,17 @@ export const BrowserExtensionPreview: React.FC<BrowserExtensionPreviewProps> = (
       linkedinUrl: extractedData.linkedinUrl || currentDemo.linkedinUrl,
       avatarUrl: currentDemo.avatarUrl,
       email: extractedData.email || '',
-      secondaryEmail: (extractedData as any).secondaryEmail || `${(extractedData.firstName || 'lead').toLowerCase()}.personal@gmail.com`,
-      alternateEmail: (extractedData as any).alternateEmail || `${(extractedData.firstName || 'lead').toLowerCase()}@corp-${extractedData.companyDomain || 'company.com'}`,
-      emailStatus: 'verified',
-      phone: extractedData.phone || '+1 (555) 234-5678',
-      mobilePhone: extractedData.phone || '+1 (555) 234-5678',
-      directPhone: (extractedData as any).directPhone || '+1 (555) 890-1234',
-      hqPhone: (extractedData as any).hqPhone || '+1 (800) 555-0199',
+      // Only store contact data the enrichment actually found — never invent placeholder numbers/emails
+      secondaryEmail: extractedData.secondaryEmail,
+      alternateEmail: extractedData.alternateEmail,
+      emailStatus: extractedData.emailStatus || 'unverified',
+      phone: extractedData.phone || '',
+      mobilePhone: extractedData.mobilePhone || extractedData.phone || undefined,
+      directPhone: extractedData.directPhone,
+      hqPhone: extractedData.hqPhone,
       phoneType: 'mobile',
-      phoneConfidence: 96,
-      mobileVerified: true,
+      phoneConfidence: extractedData.phoneConfidence || 0,
+      mobileVerified: !!extractedData.mobileVerified,
       jobHistory: extractedData.jobHistory || [],
       education: extractedData.education || [],
       skills: extractedData.skills || ['Leadership', 'Sales'],
@@ -401,15 +402,15 @@ export const BrowserExtensionPreview: React.FC<BrowserExtensionPreviewProps> = (
                       <div className="space-y-1 text-xs font-mono">
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-sans text-slate-400">📱 Mobile:</span>
-                          <span className="text-emerald-300 font-bold">{extractedData.phone || '+1 (555) 234-5678'}</span>
+                          <span className="text-emerald-300 font-bold">{extractedData.phone || 'Not found'}</span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-sans text-slate-400">☎️ Direct:</span>
-                          <span className="text-blue-300 font-bold">+1 (555) 890-1234</span>
+                          <span className="text-blue-300 font-bold">{extractedData.directPhone || 'Not found'}</span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-sans text-slate-400">🏢 HQ Switch:</span>
-                          <span className="text-purple-300 font-bold">+1 (800) 555-0199</span>
+                          <span className="text-purple-300 font-bold">{extractedData.hqPhone || 'Not found'}</span>
                         </div>
                       </div>
                     </div>
@@ -430,11 +431,11 @@ export const BrowserExtensionPreview: React.FC<BrowserExtensionPreviewProps> = (
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-sans text-slate-400">👤 Personal:</span>
-                          <span className="text-slate-300 font-bold truncate max-w-[130px]">{(extractedData.firstName || 'lead').toLowerCase()}.personal@gmail.com</span>
+                          <span className="text-slate-300 font-bold truncate max-w-[130px]">{extractedData.secondaryEmail || 'Not found'}</span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-sans text-slate-400">🌐 Corp Alt:</span>
-                          <span className="text-indigo-300 font-bold truncate max-w-[130px]">{(extractedData.firstName || 'lead').toLowerCase()}@corp-{extractedData.companyDomain || 'company.com'}</span>
+                          <span className="text-indigo-300 font-bold truncate max-w-[130px]">{extractedData.alternateEmail || 'Not found'}</span>
                         </div>
                       </div>
                     </div>
@@ -446,7 +447,7 @@ export const BrowserExtensionPreview: React.FC<BrowserExtensionPreviewProps> = (
                         Positions Extracted:
                       </span>
                       <span className="font-semibold text-slate-200">
-                        {extractedData.jobHistory?.length || 3} roles
+                        {extractedData.jobHistory?.length || 0} roles
                       </span>
                     </div>
 

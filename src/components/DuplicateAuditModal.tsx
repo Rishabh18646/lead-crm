@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { 
   CopyCheck, 
   AlertTriangle, 
@@ -32,28 +32,22 @@ export const DuplicateAudit: React.FC<DuplicateAuditProps> = ({
   const [activeTab, setActiveTab] = useState<'all' | 'exact' | 'fuzzy'>('all');
   const [resolvedIds, setResolvedIds] = useState<string[]>([]);
 
-  // Scan leads for duplicates
-  const allDuplicates: { leadA: Lead; leadB: Lead; match: DuplicateMatch }[] = [];
-  const checkedPairs = new Set<string>();
-
-  for (let i = 0; i < leads.length; i++) {
-    const leadA = leads[i];
-    for (let j = i + 1; j < leads.length; j++) {
-      const leadB = leads[j];
-      const pairKey = [leadA.id, leadB.id].sort().join('_');
-      if (checkedPairs.has(pairKey)) continue;
-      checkedPairs.add(pairKey);
-
-      const matches = findDuplicateMatches(leadB, [leadA]);
-      if (matches.length > 0) {
-        allDuplicates.push({
-          leadA,
-          leadB,
-          match: matches[0]
-        });
+  // Scan leads for duplicates. O(n^2): memoised so it doesn't rerun on unrelated re-renders.
+  // (j > i already visits each pair once, so no separate "checked pairs" set is needed.)
+  const allDuplicates = useMemo(() => {
+    const found: { leadA: Lead; leadB: Lead; match: DuplicateMatch }[] = [];
+    for (let i = 0; i < leads.length; i++) {
+      const leadA = leads[i];
+      for (let j = i + 1; j < leads.length; j++) {
+        const leadB = leads[j];
+        const matches = findDuplicateMatches(leadB, [leadA]);
+        if (matches.length > 0) {
+          found.push({ leadA, leadB, match: matches[0] });
+        }
       }
     }
-  }
+    return found;
+  }, [leads]);
 
   const handleMerge = (leadA: Lead, leadB: Lead) => {
     // Merge B into A
@@ -113,7 +107,7 @@ export const DuplicateAudit: React.FC<DuplicateAuditProps> = ({
           <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
             <span className="text-slate-400 text-[11px]">Database Health</span>
             <p className="text-xl font-bold text-emerald-400 mt-0.5">
-              {allDuplicates.length === 0 ? '100% Clean' : `${Math.round((1 - allDuplicates.length / leads.length) * 100)}% Clean`}
+              {allDuplicates.length === 0 ? '100% Clean' : `${Math.max(0, Math.round((1 - allDuplicates.length / leads.length) * 100))}% Clean`}
             </p>
           </div>
           <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">

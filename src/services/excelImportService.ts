@@ -238,21 +238,23 @@ export async function parseExcelOrCsvFile(file: File): Promise<ParsedSheetResult
   const headers = Object.keys(rawRows[0] || {});
 
   // Intelligent column mapping finder
-  const findMatch = (candidates: string[]): string => {
+  const findMatch = (candidates: string[], exclude: string[] = []): string => {
+    const usable = headers.filter(h => !exclude.includes(h.trim().toLowerCase()));
     for (const c of candidates) {
-      const found = headers.find(h => h.trim().toLowerCase() === c.toLowerCase());
+      const found = usable.find(h => h.trim().toLowerCase() === c.toLowerCase());
       if (found) return found;
     }
     // Partial substring match
     for (const c of candidates) {
-      const found = headers.find(h => h.trim().toLowerCase().includes(c.toLowerCase()));
+      const found = usable.find(h => h.trim().toLowerCase().includes(c.toLowerCase()));
       if (found) return found;
     }
     return '';
   };
 
   const detectedMapping: ColumnMapping = {
-    fullName: findMatch(['full name', 'fullname', 'name', 'prospect name', 'contact name']),
+    // Don't let the loose 'name' match grab a First/Last/Company Name column; those are handled separately
+    fullName: findMatch(['full name', 'fullname', 'name', 'prospect name', 'contact name'], ['first name', 'firstname', 'last name', 'lastname', 'company name']),
     currentTitle: findMatch(['job title', 'title', 'position', 'role', 'current title']),
     currentCompany: findMatch(['company', 'current company', 'organization', 'employer', 'account']),
     // Emails
@@ -310,7 +312,7 @@ export function convertRowsToLeads(
         lastName = `#${idx + 1}`;
       }
     } else {
-      const parts = fullName.split(' ');
+      const parts = fullName.split(/\s+/);
       firstName = parts[0] || 'Lead';
       lastName = parts.slice(1).join(' ') || '';
     }
@@ -332,7 +334,8 @@ export function convertRowsToLeads(
     // Primary phone falls back gracefully across all available numbers
     const primaryPhone = mobilePhone || directPhone || hqPhone || genericPhone;
 
-    const linkedinUrl = (row[mapping.linkedinUrl] || `https://www.linkedin.com/in/lead-${idx + 1}`).toString().trim();
+    // No placeholder URL: fake '/in/lead-N' URLs collide across imports and trigger false 100% duplicate matches
+    const linkedinUrl = (row[mapping.linkedinUrl] || '').toString().trim();
     const location = (row[mapping.location] || 'United States').toString().trim();
     const industry = (row[mapping.industry] || 'Technology & Services').toString().trim();
 

@@ -26,11 +26,11 @@ export function getCompanyWebsiteUrl(companyDomain?: string, companyName?: strin
 }
 
 export function getMailtoUrl(email: string, subject = '', body = ''): string {
-  const params = new URLSearchParams();
-  if (subject) params.append('subject', subject);
-  if (body) params.append('body', body);
-  const query = params.toString();
-  return `mailto:${email}${query ? `?${query}` : ''}`;
+  // mailto: needs %20-style encoding; URLSearchParams turns spaces into '+', which mail clients show literally
+  const params: string[] = [];
+  if (subject) params.push(`subject=${encodeURIComponent(subject)}`);
+  if (body) params.push(`body=${encodeURIComponent(body)}`);
+  return `mailto:${email}${params.length ? `?${params.join('&')}` : ''}`;
 }
 
 export function getGmailComposeUrl(email: string, subject = '', body = ''): string {

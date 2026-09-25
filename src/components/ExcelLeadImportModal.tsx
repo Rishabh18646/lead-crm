@@ -28,13 +28,13 @@ import {
   ColumnMapping, 
   ParsedSheetResult 
 } from '../services/excelImportService';
-import { findDuplicateMatches } from '../services/deduplicationService';
+import { findDuplicateMatches, mergeLeads } from '../services/deduplicationService';
 
 interface ExcelLeadImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   existingLeads: Lead[];
-  onImportCompleted: (importedLeads: Lead[], mergedCount: number) => void;
+  onImportCompleted: (importedLeads: Lead[], duplicateCount: number, mergedLeads?: Lead[]) => void;
 }
 
 export const ExcelLeadImportModal: React.FC<ExcelLeadImportModalProps> = ({
@@ -158,23 +158,34 @@ export const ExcelLeadImportModal: React.FC<ExcelLeadImportModalProps> = ({
         const rawLeads = convertRowsToLeads(parsedResult.allRows, mapping, 'new');
         setImportProgress(40);
 
-        let freshLeads: Lead[] = [];
+        const freshLeads: Lead[] = [];
+        // Existing leads updated by the 'merge' strategy, keyed by id so repeated rows accumulate
+        const mergedById = new Map<string, Lead>();
         let duplicateCount = 0;
 
-        // Perform duplicate analysis
+        // Perform duplicate analysis against the CRM *and* rows accepted earlier in this same file
         for (const candidate of rawLeads) {
-          const matches = findDuplicateMatches(candidate, existingLeads);
-          if (matches.length > 0) {
-            duplicateCount++;
-            if (duplicateStrategy === 'all') {
-              freshLeads.push(candidate);
-            } else if (duplicateStrategy === 'merge') {
-              // Could merge into existing; for this batch action, include if user wants to update
-              freshLeads.push(candidate);
-            }
-          } else {
+          const pool = [...existingLeads.map(l => mergedById.get(l.id) || l), ...freshLeads];
+          const matches = findDuplicateMatches(candidate, pool);
+          if (matches.length === 0) {
             freshLeads.push(candidate);
+            continue;
           }
+
+          duplicateCount++;
+          if (duplicateStrategy === 'all') {
+            freshLeads.push(candidate);
+          } else if (duplicateStrategy === 'merge') {
+            const target = matches[0].existingLead;
+            const merged = mergeLeads(target, candidate);
+            const freshIdx = freshLeads.findIndex(l => l.id === target.id);
+            if (freshIdx >= 0) {
+              freshLeads[freshIdx] = merged;
+            } else {
+              mergedById.set(target.id, merged);
+            }
+          }
+          // 'skip': drop the row
         }
 
         setImportProgress(85);
@@ -186,7 +197,7 @@ export const ExcelLeadImportModal: React.FC<ExcelLeadImportModalProps> = ({
             fresh: freshLeads.length,
             duplicates: duplicateCount
           });
-          onImportCompleted(freshLeads, duplicateCount);
+          onImportCompleted(freshLeads, duplicateCount, Array.from(mergedById.values()));
           setStep('done');
         }, 400);
 

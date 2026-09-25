@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowUp, ShieldCheck, Lock, LogIn, AlertTriangle, Sparkles } from 'lucide-react';
 import { Lead, OutreachSequence, CreditWallet, OutreachLog, LeadStage, UserProfile, UserRole } from './types';
@@ -17,7 +17,7 @@ import { AuthModal } from './components/AuthModal';
 import { ProfileModal } from './components/ProfileModal';
 import { TeamView } from './components/TeamView';
 import { PricingView } from './components/PricingView';
-import { findDuplicateMatches } from './services/deduplicationService';
+import { findDuplicateMatches, mergeLeads } from './services/deduplicationService';
 import { advanceLeadInSequence } from './services/outreachService';
 import { authService } from './services/authService';
 
@@ -105,6 +105,7 @@ export default function App() {
   const isExcelImportModalOpen = modalParam === 'import';
   const isAuthModalOpen = modalParam === 'auth';
   const isProfileModalOpen = modalParam === 'profile';
+  const isInviteModalOpen = modalParam === 'invite';
 
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -139,22 +140,19 @@ export default function App() {
     };
   }, []);
 
-  // Sync business entities with localStorage
-  useEffect(() => {
-    localStorage.setItem('leadpulse_leads', JSON.stringify(leads));
-  }, [leads]);
+  // Sync business entities with localStorage (writes can throw on quota exceeded / private mode)
+  const persist = (key: string, value: unknown) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (err) {
+      console.warn(`Could not persist ${key} to localStorage:`, err);
+    }
+  };
 
-  useEffect(() => {
-    localStorage.setItem('leadpulse_sequences', JSON.stringify(sequences));
-  }, [sequences]);
-
-  useEffect(() => {
-    localStorage.setItem('leadpulse_wallet', JSON.stringify(wallet));
-  }, [wallet]);
-
-  useEffect(() => {
-    localStorage.setItem('leadpulse_logs', JSON.stringify(logs));
-  }, [logs]);
+  useEffect(() => persist('leadpulse_leads', leads), [leads]);
+  useEffect(() => persist('leadpulse_sequences', sequences), [sequences]);
+  useEffect(() => persist('leadpulse_wallet', wallet), [wallet]);
+  useEffect(() => persist('leadpulse_logs', logs), [logs]);
 
   // Scroll listener for Back to Top helper
   useEffect(() => {
@@ -165,9 +163,12 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = (msg: string) => {
+    // Cancel the previous timer so it doesn't hide this newer toast early
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3800);
+    toastTimerRef.current = setTimeout(() => setToastMessage(null), 3800);
   };
 
   const handleSwitchTab = (newTab: TabType) => {
@@ -178,8 +179,8 @@ export default function App() {
   };
 
   const handleBackToPreviousTab = () => {
-    // If browser history has an entry, go back
-    if (window.history.length > 1) {
+    // Only go back if the previous history entry belongs to this app (idx is set by React Router)
+    if (window.history.state && window.history.state.idx > 0) {
       navigate(-1);
     } else if (previousTab && previousTab !== activeTab) {
       navigate(`/${previousTab}`);
@@ -191,8 +192,10 @@ export default function App() {
   const handleSelectLead = (lead: Lead | null) => {
     const params = new URLSearchParams(location.search);
     if (lead) {
+      // Switching between leads replaces the entry so closing the drawer doesn't reopen the previous lead
+      const alreadyOpen = params.has('lead');
       params.set('lead', lead.id);
-      navigate({ pathname: location.pathname, search: params.toString() });
+      navigate({ pathname: location.pathname, search: params.toString() }, { replace: alreadyOpen });
     } else {
       handleCloseDrawer();
     }
@@ -210,7 +213,7 @@ export default function App() {
     }
   };
 
-  const openModal = (modalName: 'enrich' | 'pricing' | 'import' | 'auth' | 'profile') => {
+  const openModal = (modalName: 'enrich' | 'pricing' | 'import' | 'auth' | 'profile' | 'invite') => {
     const params = new URLSearchParams(location.search);
     params.set('modal', modalName);
     navigate({ pathname: location.pathname, search: params.toString() });
@@ -228,38 +231,56 @@ export default function App() {
     }
   };
 
+  // Swap the open modal for another in place. Calling closeModal() then openModal() races:
+  // closeModal's navigate(-1) resolves after the push and pops right back to the old modal.
+  const switchModal = (modalName: 'enrich' | 'pricing' | 'import' | 'auth' | 'profile' | 'invite') => {
+    const params = new URLSearchParams(location.search);
+    params.set('modal', modalName);
+    navigate({ pathname: location.pathname, search: params.toString() }, { replace: true });
+  };
+
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleImportCompleted = (newLeads: Lead[], mergedCount: number) => {
-    setLeads(prev => [...newLeads, ...prev]);
-    showToast(`Successfully imported ${newLeads.length.toLocaleString()} leads into CRM! (${mergedCount} duplicates handled).`);
+  const handleImportCompleted = (newLeads: Lead[], duplicateCount: number, mergedLeads: Lead[] = []) => {
+    const mergedById = new Map(mergedLeads.map(l => [l.id, l]));
+    setLeads(prev => [...newLeads, ...prev.map(l => mergedById.get(l.id) || l)]);
+    showToast(`Successfully imported ${newLeads.length.toLocaleString()} leads into CRM! (${duplicateCount} duplicates handled${mergedLeads.length ? `, ${mergedLeads.length} existing leads updated` : ''}).`);
     handleSwitchTab('crm');
   };
 
-  // Duplicate detection count across CRM
-  let duplicateCount = 0;
-  for (let i = 0; i < leads.length; i++) {
-    for (let j = i + 1; j < leads.length; j++) {
-      if (findDuplicateMatches(leads[j], [leads[i]]).length > 0) {
-        duplicateCount++;
+  // Duplicate detection count across CRM. O(n^2), so only recompute when leads change —
+  // not on every render (e.g. each keystroke in the search box).
+  const duplicateCount = useMemo(() => {
+    let count = 0;
+    for (let i = 0; i < leads.length; i++) {
+      for (let j = i + 1; j < leads.length; j++) {
+        if (findDuplicateMatches(leads[j], [leads[i]]).length > 0) {
+          count++;
+        }
       }
     }
-  }
+    return count;
+  }, [leads]);
 
   // Filter leads based on search query
   const displayedLeads = leads.filter(lead => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (
-      lead.fullName.toLowerCase().includes(q) ||
-      lead.currentCompany.toLowerCase().includes(q) ||
-      lead.currentTitle.toLowerCase().includes(q) ||
-      lead.email.toLowerCase().includes(q) ||
-      lead.phone.includes(q) ||
-      lead.location.toLowerCase().includes(q)
-    );
+    return [
+      lead.fullName,
+      lead.currentCompany,
+      lead.currentTitle,
+      lead.email,
+      lead.secondaryEmail,
+      lead.alternateEmail,
+      lead.phone,
+      lead.mobilePhone,
+      lead.directPhone,
+      lead.hqPhone,
+      lead.location
+    ].some(field => (field || '').toLowerCase().includes(q));
   });
 
   // Handlers
@@ -296,13 +317,17 @@ export default function App() {
       return;
     }
 
+    const target = leads.find(l => l.id === leadId);
+    if (!window.confirm(`Delete lead "${target?.fullName || 'Prospect'}"? This cannot be undone.`)) {
+      return;
+    }
+
     try {
       const res = await authService.deleteLeadServer(leadId);
       if (!res.success) {
         showToast(res.error || 'Server error: permission denied.');
         return;
       }
-      const target = leads.find(l => l.id === leadId);
       setLeads(prev => prev.filter(l => l.id !== leadId));
       if (selectedLead?.id === leadId) {
         handleCloseDrawer();
@@ -355,6 +380,7 @@ export default function App() {
   const handleLogout = async () => {
     await authService.logoutUser();
     setCurrentUser(null);
+    setProfiles([]);
     showToast('Signed out of workspace session.');
     openModal('auth');
   };
@@ -398,10 +424,26 @@ export default function App() {
     }
   };
 
+  // Admin adds a member without switching the admin's own session (signup would log in as the new user)
+  const handleCreateMember = async (profileData: Parameters<typeof authService.createMember>[0]): Promise<{ success: boolean; error?: string }> => {
+    const res = await authService.createMember(profileData);
+    if (res.success && res.member) {
+      setProfiles(prev => [...prev, res.member!]);
+      showToast(`Added ${res.member.name} to the workspace.`);
+      return { success: true };
+    }
+    return { success: false, error: res.error || 'Failed to add team member.' };
+  };
+
   // Secure Server-Enforced Member Deletion (Admin Only)
   const handleDeleteProfile = async (profileId: string) => {
     if (!currentUser) {
       showToast('Authentication required.');
+      return;
+    }
+
+    const target = profiles.find(p => p.id === profileId);
+    if (!window.confirm(`Remove "${target?.name || 'this member'}" from the workspace? Their sessions will be revoked.`)) {
       return;
     }
 
@@ -415,11 +457,21 @@ export default function App() {
   };
 
   const handleBulkEnroll = (leadIds: string[]) => {
-    const targetSeq = sequences[0];
+    // Prefer an active sequence; paused/draft sequences shouldn't receive new enrollments by default
+    const targetSeq = sequences.find(s => s.status === 'active') || sequences[0];
     if (!targetSeq) return;
 
+    // Skip leads already in this sequence so enrolledCount isn't double-counted
+    const idsToEnroll = new Set(
+      leads.filter(l => leadIds.includes(l.id) && l.sequenceId !== targetSeq.id).map(l => l.id)
+    );
+    if (idsToEnroll.size === 0) {
+      showToast(`Selected lead(s) are already enrolled in "${targetSeq.name}".`);
+      return;
+    }
+
     setLeads(prev => prev.map(l => {
-      if (leadIds.includes(l.id)) {
+      if (idsToEnroll.has(l.id)) {
         return {
           ...l,
           stage: 'in_sequence',
@@ -433,8 +485,8 @@ export default function App() {
       return l;
     }));
 
-    setSequences(prev => prev.map(s => s.id === targetSeq.id ? { ...s, enrolledCount: s.enrolledCount + leadIds.length } : s));
-    showToast(`${leadIds.length} lead(s) enrolled into "${targetSeq.name}".`);
+    setSequences(prev => prev.map(s => s.id === targetSeq.id ? { ...s, enrolledCount: s.enrolledCount + idsToEnroll.size } : s));
+    showToast(`${idsToEnroll.size} lead(s) enrolled into "${targetSeq.name}".`);
   };
 
   const handleBulkExport = (leadIds: string[]) => {
@@ -461,34 +513,46 @@ export default function App() {
       'Step'
     ];
 
-    const rows = exportTargets.map(l => [
-      `"${(l.fullName || '').replace(/"/g, '""')}"`,
-      `"${(l.firstName || '').replace(/"/g, '""')}"`,
-      `"${(l.lastName || '').replace(/"/g, '""')}"`,
-      `"${(l.currentTitle || '').replace(/"/g, '""')}"`,
-      `"${(l.currentCompany || '').replace(/"/g, '""')}"`,
-      `"${(l.mobilePhone || (l.phoneType === 'mobile' ? l.phone : '') || '').replace(/"/g, '""')}"`,
-      `"${(l.directPhone || (l.phoneType === 'direct' ? l.phone : '') || '').replace(/"/g, '""')}"`,
-      `"${(l.hqPhone || (l.phoneType === 'hq' ? l.phone : '') || '').replace(/"/g, '""')}"`,
-      `"${(l.email || '').replace(/"/g, '""')}"`,
-      `"${(l.secondaryEmail || '').replace(/"/g, '""')}"`,
-      `"${(l.alternateEmail || '').replace(/"/g, '""')}"`,
-      `"${(l.linkedinUrl || '').replace(/"/g, '""')}"`,
-      `"${(l.location || '').replace(/"/g, '""')}"`,
-      `"${(l.industry || '').replace(/"/g, '""')}"`,
-      `"${(l.stage || '').replace(/"/g, '""')}"`,
-      `"${(l.sequenceName || 'None').replace(/"/g, '""')}"`,
-      `"${l.sequenceStep || 0}"`
-    ]);
+    // Quote every cell, and neutralise spreadsheet formula injection (=, @, +cmd, -cmd, tab, CR)
+    const csvCell = (value: string | number | undefined) => {
+      let text = String(value ?? '');
+      if (/^[=@\t\r]/.test(text) || /^[+-][^\d\s(]/.test(text)) {
+        text = `'${text}`;
+      }
+      return `"${text.replace(/"/g, '""')}"`;
+    };
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const rows = exportTargets.map(l => [
+      l.fullName,
+      l.firstName,
+      l.lastName,
+      l.currentTitle,
+      l.currentCompany,
+      l.mobilePhone || (l.phoneType === 'mobile' ? l.phone : ''),
+      l.directPhone || (l.phoneType === 'direct' ? l.phone : ''),
+      l.hqPhone || (l.phoneType === 'hq' ? l.phone : ''),
+      l.email,
+      l.secondaryEmail,
+      l.alternateEmail,
+      l.linkedinUrl,
+      l.location,
+      l.industry,
+      l.stage,
+      l.sequenceName || 'None',
+      l.sequenceStep || 0
+    ].map(csvCell));
+
+    // Use a Blob: a data: URI built with encodeURI() is cut off at the first '#' in any cell
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `LeadPulse_Export_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 
     showToast(`Exported ${exportTargets.length} leads with multi-category contacts to CSV.`);
   };
@@ -500,18 +564,34 @@ export default function App() {
     const targetSeq = sequences.find(s => s.id === target.sequenceId);
     if (!targetSeq) return;
 
-    const currentStep = targetSeq.steps[target.sequenceStep ? target.sequenceStep - 1 : 0] || targetSeq.steps[0];
+    if (target.sequenceStatus === 'completed') {
+      showToast(`"${target.fullName}" has already completed "${targetSeq.name}".`);
+      return;
+    }
+
+    const orderedSteps = [...targetSeq.steps].sort((a, b) => a.order - b.order);
+    // Clamp instead of falling back to step 1, which used to restart the cadence from the top
+    const stepIdx = Math.min(Math.max((target.sequenceStep || 1) - 1, 0), orderedSteps.length - 1);
+    const currentStep = orderedSteps[stepIdx];
     if (!currentStep) return;
 
-    const result = advanceLeadInSequence(target, currentStep, targetSeq.name);
+    const result = advanceLeadInSequence(target, currentStep, targetSeq.name, orderedSteps.length);
     setLeads(prev => prev.map(l => l.id === leadId ? result.updatedLead : l));
     setLogs(prev => [result.log, ...prev]);
-    showToast(`Lead advanced to Step ${result.updatedLead.sequenceStep || 1} in "${targetSeq.name}".`);
+    showToast(result.updatedLead.sequenceStatus === 'completed'
+      ? `Final step executed — "${target.fullName}" completed "${targetSeq.name}".`
+      : `Lead advanced to Step ${result.updatedLead.sequenceStep || 1} in "${targetSeq.name}".`);
   };
 
   const handleEnrollSingleLead = (leadId: string, sequenceId: string) => {
     const targetSeq = sequences.find(s => s.id === sequenceId);
     if (!targetSeq) return;
+
+    const lead = leads.find(l => l.id === leadId);
+    if (lead?.sequenceId === sequenceId && lead.sequenceStatus !== 'completed') {
+      showToast(`Prospect is already enrolled in "${targetSeq.name}".`);
+      return;
+    }
 
     setLeads(prev => prev.map(l => {
       if (l.id === leadId) {
@@ -528,12 +608,18 @@ export default function App() {
       return l;
     }));
 
-    setSequences(prev => prev.map(s => s.id === sequenceId ? { ...s, enrolledCount: s.enrolledCount + 1 } : s));
+    setSequences(prev => prev.map(s => {
+      if (s.id === sequenceId) return { ...s, enrolledCount: s.enrolledCount + 1 };
+      // Moving the lead out of its previous sequence
+      if (lead?.sequenceId && s.id === lead.sequenceId) return { ...s, enrolledCount: Math.max(0, s.enrolledCount - 1) };
+      return s;
+    }));
     showToast(`Prospect enrolled in "${targetSeq.name}".`);
   };
 
-  const handleUpgradePlan = (planId: string) => {
-    const plan = SUBSCRIPTION_PLANS.find(p => p.id === planId);
+  // Accepts a plan id ('plan-growth') or a tier ('growth') — SubscriptionModal passes the tier
+  const handleUpgradePlan = (planIdOrTier: string) => {
+    const plan = SUBSCRIPTION_PLANS.find(p => p.id === planIdOrTier || p.tier === planIdOrTier);
     if (!plan) return;
 
     setWallet(prev => ({
@@ -619,6 +705,7 @@ export default function App() {
         {activeTab === 'crm' && (
           <LeadTable
             leads={displayedLeads}
+            sequences={sequences}
             currentUser={currentUser}
             onSelectLead={handleSelectLead}
             onUpdateStage={handleUpdateStage}
@@ -656,8 +743,13 @@ export default function App() {
           <BrowserExtensionPreview
             existingLeads={leads}
             onImportLead={(newLead) => {
-              setLeads(prev => [newLead, ...prev]);
-              showToast(`Lead "${newLead.fullName}" captured via LeadPulse Chrome Extension.`);
+              const creditsUsed = { email: newLead.email ? 1 : 0, mobile: newLead.mobilePhone ? 5 : 0 };
+              const match = findDuplicateMatches(newLead, leads)[0];
+              if (match) {
+                handleMergeLead(mergeLeads(match.existingLead, newLead), creditsUsed);
+              } else {
+                handleAddLead(newLead, creditsUsed);
+              }
               handleSwitchTab('crm');
             }}
             onOpenPricing={() => handleSwitchTab('pricing')}
@@ -682,10 +774,7 @@ export default function App() {
         {activeTab === 'pricing' && (
           <PricingView
             wallet={wallet}
-            onUpgradePlan={(tier) => {
-              const targetPlan = SUBSCRIPTION_PLANS.find(p => p.tier === tier);
-              if (targetPlan) handleUpgradePlan(targetPlan.id);
-            }}
+            onUpgradePlan={handleUpgradePlan}
             onTopUpCredits={handleTopUpCredits}
             onBack={handleBackToPreviousTab}
             previousPageTitle={TAB_LABELS[previousTab || 'crm'] || 'Dashboard'}
@@ -697,7 +786,7 @@ export default function App() {
           <TeamView
             currentUser={currentUser}
             allProfiles={profiles}
-            onOpenCreateProfile={() => openModal('auth')}
+            onOpenCreateProfile={() => openModal('invite')}
             onChangeUserRole={handleChangeUserRole}
             onDeleteProfile={handleDeleteProfile}
             onOpenProfileModal={() => openModal('profile')}
@@ -730,8 +819,8 @@ export default function App() {
         onAddLead={handleAddLead}
         onMergeLead={handleMergeLead}
         onOpenPricing={() => {
-          closeModal();
-          handleSwitchTab('pricing');
+          // Replace the modal entry rather than closeModal() + navigate, which race each other
+          navigate('/pricing', { replace: true });
         }}
       />
 
@@ -760,6 +849,18 @@ export default function App() {
         onSignup={handleSignup}
       />
 
+      {/* Admin: add a team member without switching sessions */}
+      {currentUser?.role === 'admin' && (
+        <AuthModal
+          isOpen={isInviteModalOpen}
+          onClose={closeModal}
+          onLogin={handleLogin}
+          onSignup={handleCreateMember}
+          initialMode="signup"
+          inviteMode
+        />
+      )}
+
       {/* Profile & Team Permissions Modal */}
       {currentUser && (
         <ProfileModal
@@ -768,10 +869,7 @@ export default function App() {
           currentUser={currentUser}
           allProfiles={profiles}
           onUpdateProfile={handleUpdateProfile}
-          onOpenCreateProfile={() => {
-            closeModal();
-            openModal('auth');
-          }}
+          onOpenCreateProfile={() => switchModal('invite')}
           onDeleteProfile={handleDeleteProfile}
           onChangeUserRole={handleChangeUserRole}
           onLogout={handleLogout}

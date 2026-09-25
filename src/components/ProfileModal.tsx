@@ -84,10 +84,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       name: name.trim(),
       title: title.trim(),
       company: company.trim(),
-      phone: phone.trim() || undefined,
-      bio: bio.trim() || undefined,
-      department: department.trim() || undefined,
-      avatarUrl: avatarUrl.trim() || undefined
+      // Send '' (not undefined) so clearing a field reaches the server — JSON.stringify drops undefined keys
+      phone: phone.trim(),
+      bio: bio.trim(),
+      department: department.trim(),
+      avatarUrl: avatarUrl.trim()
     });
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2500);

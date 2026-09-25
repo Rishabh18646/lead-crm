@@ -92,6 +92,7 @@ export function findDuplicateMatches(
       existFirst === candFirst &&
       existLast === candLast &&
       candCompany &&
+      existCompany &&
       (existCompany.includes(candCompany) || candCompany.includes(existCompany))
     ) {
       matches.push({
@@ -123,24 +124,38 @@ export function mergeLeads(existing: Lead, incoming: Partial<Lead>): Lead {
   // Combine tags
   const mergedTags = Array.from(new Set([...(existing.tags || []), ...(incoming.tags || [])]));
 
+  const takeIncomingPhone = !!incoming.phone && (!existing.phone || !!incoming.mobileVerified);
+
   return {
     ...existing,
     // Fill in contact info if existing had none or incoming is verified
     email: incoming.emailStatus === 'verified' ? (incoming.email || existing.email) : (existing.email || incoming.email || ''),
     emailStatus: existing.emailStatus === 'verified' ? 'verified' : (incoming.emailStatus || existing.emailStatus),
-    phone: incoming.phone && (!existing.phone || incoming.mobileVerified) ? incoming.phone : existing.phone,
-    phoneType: incoming.phoneType || existing.phoneType,
+    secondaryEmail: existing.secondaryEmail || incoming.secondaryEmail,
+    alternateEmail: existing.alternateEmail || incoming.alternateEmail,
+    phone: takeIncomingPhone ? incoming.phone! : existing.phone,
+    // Keep phoneType consistent with whichever phone number was kept
+    phoneType: takeIncomingPhone ? (incoming.phoneType || existing.phoneType) : existing.phoneType,
     phoneConfidence: Math.max(existing.phoneConfidence || 0, incoming.phoneConfidence || 0),
     mobileVerified: existing.mobileVerified || incoming.mobileVerified || false,
-    
+    mobilePhone: incoming.mobileVerified ? (incoming.mobilePhone || existing.mobilePhone) : (existing.mobilePhone || incoming.mobilePhone),
+    directPhone: existing.directPhone || incoming.directPhone,
+    hqPhone: existing.hqPhone || incoming.hqPhone,
+
     // Update professional current title if incoming is newer
     currentTitle: incoming.currentTitle || existing.currentTitle,
     currentCompany: incoming.currentCompany || existing.currentCompany,
     companyDomain: incoming.companyDomain || existing.companyDomain,
+    companySize: incoming.companySize || existing.companySize,
+    industry: incoming.industry || existing.industry,
     headline: incoming.headline || existing.headline,
     location: incoming.location || existing.location,
-    
+    linkedinUrl: existing.linkedinUrl || incoming.linkedinUrl || '',
+    avatarUrl: existing.avatarUrl || incoming.avatarUrl,
+    summary: existing.summary || incoming.summary,
+
     jobHistory: [...newJobs, ...existing.jobHistory],
+    education: existing.education?.length ? existing.education : (incoming.education || []),
     skills: Array.from(new Set([...(existing.skills || []), ...(incoming.skills || [])])),
     tags: mergedTags,
     notes: incoming.notes ? `${existing.notes ? `${existing.notes}\n` : ''}[Enriched]: ${incoming.notes}` : existing.notes,
