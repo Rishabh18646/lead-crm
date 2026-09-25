@@ -1,4 +1,4 @@
-import { UserProfile, UserRole } from '../types';
+import { Lead, UserProfile, UserRole } from '../types';
 
 const TOKEN_STORAGE_KEY = 'lp_session_token';
 
@@ -163,6 +163,36 @@ export async function fetchWorkspaceMembers(): Promise<UserProfile[]> {
   }
 }
 
+export async function createMemberApi(payload: {
+  name: string;
+  email: string;
+  password: string;
+  company?: string;
+  title?: string;
+  phone?: string;
+  department?: string;
+  bio?: string;
+  avatarUrl?: string;
+}): Promise<{ success: boolean; member?: UserProfile; error?: string }> {
+  try {
+    const res = await fetch('/api/team/members', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, error: data.error || 'Failed to add member' };
+    }
+
+    return { success: true, member: data.member };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Network error' };
+  }
+}
+
 export async function updateMemberRoleApi(memberId: string, role: UserRole): Promise<{ success: boolean; member?: UserProfile; error?: string }> {
   try {
     const res = await fetch(`/api/team/members/${memberId}/role`, {
@@ -221,6 +251,23 @@ export async function deleteLeadServerApi(leadId: string): Promise<{ success: bo
   }
 }
 
+export async function generateIcebreakerApi(lead: Lead, tone: string): Promise<string | null> {
+  try {
+    const res = await fetch('/api/ai/icebreaker', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ lead, tone })
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return typeof data.icebreaker === 'string' ? data.icebreaker : null;
+  } catch {
+    return null;
+  }
+}
+
 export const authService = {
   loginUser,
   signupUser,
@@ -228,9 +275,11 @@ export const authService = {
   getCurrentUser,
   updateCurrentUserProfile,
   fetchWorkspaceMembers,
+  createMember: createMemberApi,
   updateMemberRole: updateMemberRoleApi,
   deleteMember: deleteMemberApi,
   deleteLeadServer: deleteLeadServerApi,
+  generateIcebreaker: generateIcebreakerApi,
   getStoredSessionToken,
   setStoredSessionToken
 };

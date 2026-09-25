@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Lead, LeadStage, OutreachSequence } from '../types';
 import { generateAiIcebreaker } from '../services/outreachService';
+import { authService } from '../services/authService';
 import { getCompanyWebsiteUrl, getGmailComposeUrl, getOutlookComposeUrl, getMailtoUrl } from '../utils/linkUtils';
 
 interface LeadDrawerProps {
@@ -48,6 +49,8 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
   const [hookTone, setHookTone] = useState<'executive' | 'concise' | 'warm'>('executive');
   const [isGeneratingHook, setIsGeneratingHook] = useState<boolean>(false);
   const [noteText, setNoteText] = useState<string>(lead?.notes || '');
+  const leadIdRef = React.useRef<string | undefined>(lead?.id);
+  leadIdRef.current = lead?.id;
 
   // Keep state in sync when lead changes
   useEffect(() => {
@@ -56,7 +59,8 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
       setNoteText(lead.notes || '');
       setGeneratedHook('');
     }
-  }, [lead?.id, sequences]);
+    // Only reset when a different lead is opened — sequence edits (e.g. enroll counts) must not wipe unsaved notes
+  }, [lead?.id]);
 
   // Close on Escape key
   useEffect(() => {
@@ -71,18 +75,21 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
   if (!lead) return null;
 
   const copyText = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard?.writeText(text).catch(() => {});
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleGenerateHook = () => {
+  // Uses the server's Gemini endpoint; falls back to the local template if unauthenticated/offline
+  const handleGenerateHook = async () => {
     setIsGeneratingHook(true);
-    setTimeout(() => {
-      const hook = generateAiIcebreaker(lead, hookTone);
+    const leadId = lead.id;
+    const hook = (await authService.generateIcebreaker(lead, hookTone)) || generateAiIcebreaker(lead, hookTone);
+    // Ignore the result if the user switched to another lead while waiting
+    if (leadIdRef.current === leadId) {
       setGeneratedHook(hook);
-      setIsGeneratingHook(false);
-    }, 400);
+    }
+    setIsGeneratingHook(false);
   };
 
   const handleSaveNotes = () => {
@@ -580,7 +587,7 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
                   <div>
                     <span className="font-semibold text-white text-xs">{lead.sequenceName}</span>
                     <p className="text-slate-400 text-[11px] mt-0.5">
-                      Current cadence step: <strong className="text-indigo-400">Step {lead.sequenceStep || 1} of 4</strong>
+                      Current cadence step: <strong className="text-indigo-400">Step {lead.sequenceStep || 1} of {sequences.find(s => s.id === lead.sequenceId)?.steps.length ?? '?'}</strong>
                     </p>
                   </div>
                   <span className="px-2.5 py-1 text-[10px] font-bold uppercase rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">

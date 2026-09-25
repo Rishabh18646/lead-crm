@@ -29,6 +29,8 @@ interface AuthModalProps {
     avatarUrl?: string;
   }) => Promise<{ success: boolean; error?: string }>;
   initialMode?: 'login' | 'signup';
+  // Admin adding a teammate: signup form only, and the admin's own session is kept
+  inviteMode?: boolean;
 }
 
 const AVATAR_OPTIONS = [
@@ -43,7 +45,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onLogin,
   onSignup,
-  initialMode = 'login'
+  initialMode = 'login',
+  inviteMode = false
 }) => {
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
   
@@ -62,6 +65,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [avatarUrl, setAvatarUrl] = useState(AVATAR_OPTIONS[0]);
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // useState(initialMode) only applies on first mount; re-apply it each time the modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setMode(inviteMode ? 'signup' : initialMode);
+      setErrorMessage(null);
+    }
+  }, [isOpen, initialMode, inviteMode]);
 
   // Close on Escape key
   useEffect(() => {
@@ -87,6 +98,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const res = await onLogin(loginEmail.trim(), loginPassword);
       if (res.success) {
+        // Don't keep the password in component state after a successful login
+        setLoginPassword('');
         onClose();
       } else {
         setErrorMessage(res.error || 'Authentication failed. Please verify your credentials.');
@@ -124,6 +137,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       });
 
       if (res.success) {
+        setName('');
+        setSignupEmail('');
+        setSignupPassword('');
+        setTitle('');
+        setPhone('');
         onClose();
       } else {
         setErrorMessage(res.error || 'Failed to create workspace profile.');
@@ -160,10 +178,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>{mode === 'login' ? 'Sign In to LeadPulse' : 'Create Workspace Account'}</span>
+                <span>{inviteMode ? 'Add Team Member' : mode === 'login' ? 'Sign In to LeadPulse' : 'Create Workspace Account'}</span>
               </h2>
               <p className="text-xs text-slate-400">
-                {mode === 'login' ? 'Zero-trust server-verified authentication' : 'Join your sales team workspace'}
+                {inviteMode ? 'Create a login for a teammate — you stay signed in' : mode === 'login' ? 'Zero-trust server-verified authentication' : 'Join your sales team workspace'}
               </p>
             </div>
           </div>
@@ -187,6 +205,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {/* Tab Switcher */}
+        {!inviteMode && (
         <div className="flex border-b border-slate-800 bg-slate-950/50 p-1">
           <button
             type="button"
@@ -211,6 +230,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             Sign Up
           </button>
         </div>
+        )}
 
         {/* Body Container */}
         <div className="p-6 overflow-y-auto space-y-4 flex-1">
@@ -405,7 +425,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </>
                 ) : (
                   <>
-                    <span>Create Account & Join Workspace</span>
+                    <span>{inviteMode ? 'Add Member to Workspace' : 'Create Account & Join Workspace'}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}

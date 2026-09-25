@@ -253,6 +253,7 @@ export async function enrichProfileData(
     phone,
     phoneType,
     phoneConfidence,
+    mobilePhone: phone || undefined,
     mobileVerified: includeMobile,
     jobHistory,
     skills: ['B2B Sales', 'Lead Generation', 'CRM Automation', 'Pipeline Strategy', 'Executive Networking'],

@@ -75,6 +75,12 @@ export const LeadEnrichmentModal: React.FC<LeadEnrichmentModalProps> = ({
       return;
     }
 
+    if (wallet.emailCreditsRemaining < 1) {
+      alert('You have no email credits left. Please upgrade your plan or top up credits.');
+      onOpenPricing();
+      return;
+    }
+
     if (includeMobile && wallet.mobileCreditsRemaining < 5) {
       alert('You have insufficient mobile credits. Please upgrade your plan or top up credits.');
       onOpenPricing();
@@ -117,7 +123,7 @@ export const LeadEnrichmentModal: React.FC<LeadEnrichmentModalProps> = ({
     } else {
       // Create new fresh lead
       const newLead: Lead = {
-        id: `lead-${Date.now()}`,
+        id: `lead-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         firstName: enrichResult.firstName || 'Prospect',
         lastName: enrichResult.lastName || '',
         fullName: enrichResult.fullName || `${enrichResult.firstName} ${enrichResult.lastName}`,
@@ -131,6 +137,7 @@ export const LeadEnrichmentModal: React.FC<LeadEnrichmentModalProps> = ({
         email: enrichResult.email || '',
         emailStatus: enrichResult.emailStatus || 'verified',
         phone: enrichResult.phone || '',
+        mobilePhone: enrichResult.mobilePhone,
         phoneType: enrichResult.phoneType || 'mobile',
         phoneConfidence: enrichResult.phoneConfidence || 95,
         mobileVerified: !!enrichResult.phone,
@@ -147,6 +154,13 @@ export const LeadEnrichmentModal: React.FC<LeadEnrichmentModalProps> = ({
       onAddLead(newLead, creditsCost);
     }
 
+    // Clear the result so reopening the modal can't import (and charge for) the same prospect twice
+    setEnrichResult(null);
+    setDuplicateMatches([]);
+    setLinkedinUrl('');
+    setFullName('');
+    setCompany('');
+    setTitle('');
     onClose();
   };
 

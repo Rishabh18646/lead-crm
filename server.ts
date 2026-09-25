@@ -46,8 +46,18 @@ export interface SessionRecord {
 // IN-MEMORY SECURE REPOSITORY (Real bcrypt password hashes & active sessions)
 // ============================================================================
 
+// Seed account password. 'password123' is only acceptable in development: in production the
+// seeded admin would otherwise be publicly logged-in-able with a well-known password.
+function resolveSeedPassword(): string {
+  if (process.env.SEED_USER_PASSWORD) return process.env.SEED_USER_PASSWORD;
+  if (process.env.NODE_ENV !== 'production') return 'password123';
+  const generated = crypto.randomBytes(12).toString('base64url');
+  console.warn(`[LeadPulse] SEED_USER_PASSWORD not set; generated one-time seed password: ${generated}`);
+  return generated;
+}
+
 // Pre-compute real bcrypt hashes with work factor 10 for initial seed accounts
-const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
+const DEFAULT_PASSWORD_HASH = bcrypt.hashSync(resolveSeedPassword(), 10);
 
 const usersDb = new Map<string, DbUser>();
 const sessionsDb = new Map<string, SessionRecord>();
@@ -133,6 +143,14 @@ function generateSessionToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Periodically purge expired sessions so the in-memory store doesn't grow unbounded
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessionsDb.entries()) {
+    if (now > session.expiresAt) sessionsDb.delete(token);
+  }
+}, 60 * 60 * 1000).unref();
+
 // Extended Request interface with authenticated user
 export interface AuthenticatedRequest extends Request {
   user?: DbUser;
@@ -216,6 +234,60 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   next();
 }
 
+/**
+ * Validates a signup-style payload and builds a new member record.
+ * Role is always 'member' — it can never be set from the client payload.
+ */
+function buildNewMember(body: any): { user?: DbUser; status?: number; error?: string } {
+  const { name, email, password, company, title, phone, department, bio, avatarUrl } = body;
+
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return { status: 400, error: 'Full name must be at least 2 characters.' };
+  }
+
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    return { status: 400, error: 'A valid email address is required.' };
+  }
+
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    return { status: 400, error: 'Password must be at least 8 characters long.' };
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // Check if email already registered
+  for (const u of usersDb.values()) {
+    if (u.email.toLowerCase() === normalizedEmail) {
+      return { status: 409, error: 'A user account with this email address already exists.' };
+    }
+  }
+
+  // Role cannot be spoofed by client payload: strictly 'member'
+  const assignedRole: UserRole = 'member';
+  const passwordHash = bcrypt.hashSync(password, 10);
+  const userId = `user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+
+  const newUser: DbUser = {
+    id: userId,
+    name: name.trim(),
+    email: normalizedEmail,
+    passwordHash,
+    role: assignedRole,
+    title: (typeof title === 'string' && title.trim()) || 'Sales Representative',
+    company: (typeof company === 'string' && company.trim()) || 'Nexus Global Software',
+    avatarUrl: (typeof avatarUrl === 'string' && avatarUrl.trim()) || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+    phone: typeof phone === 'string' ? phone.trim() : undefined,
+    department: typeof department === 'string' ? department.trim() : 'Sales Outbound',
+    bio: typeof bio === 'string' ? bio.trim() : 'Managing B2B outbound prospects.',
+    createdAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+    failedLoginAttempts: 0,
+    lockedUntil: null
+  };
+
+  return { user: newUser };
+}
+
 // ============================================================================
 // GEMINI CLIENT INITIALIZER
 // ============================================================================
@@ -234,7 +306,7 @@ function getAI(): GoogleGenAI | null {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
   app.use(cookieParser(process.env.SESSION_SECRET || 'leadpulse-session-secret-local-dev'));
@@ -281,6 +353,8 @@ async function startServer() {
     }
 
     if (!targetUser) {
+      // Run a dummy bcrypt compare so response timing doesn't reveal which emails exist
+      bcrypt.compareSync(password, DEFAULT_PASSWORD_HASH);
       // Return generic error to prevent email enumeration
       res.status(401).json({ error: 'Invalid email address or password.' });
       return;
@@ -293,6 +367,12 @@ async function startServer() {
         error: `Account temporarily locked due to excessive failed attempts. Please retry in ${remainingMinutes} minute(s).` 
       });
       return;
+    }
+
+    // Lock window has elapsed: start a fresh attempt counter
+    if (targetUser.lockedUntil && Date.now() >= targetUser.lockedUntil) {
+      targetUser.lockedUntil = null;
+      targetUser.failedLoginAttempts = 0;
     }
 
     // Verify password against bcrypt hash
@@ -355,55 +435,12 @@ async function startServer() {
    * The role is assigned server-side ('member' by default).
    */
   app.post('/api/auth/signup', (req: Request, res: Response) => {
-    const { name, email, password, company, title, phone, department, bio, avatarUrl } = req.body;
-
-    if (!name || typeof name !== 'string' || name.trim().length < 2) {
-      res.status(400).json({ error: 'Full name must be at least 2 characters.' });
+    const result = buildNewMember(req.body);
+    if (!result.user) {
+      res.status(result.status!).json({ error: result.error });
       return;
     }
-
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      res.status(400).json({ error: 'A valid email address is required.' });
-      return;
-    }
-
-    if (!password || typeof password !== 'string' || password.length < 8) {
-      res.status(400).json({ error: 'Password must be at least 8 characters long.' });
-      return;
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    // Check if email already registered
-    for (const u of usersDb.values()) {
-      if (u.email.toLowerCase() === normalizedEmail) {
-        res.status(409).json({ error: 'A user account with this email address already exists.' });
-        return;
-      }
-    }
-
-    // Role cannot be spoofed by client payload: strictly 'member'
-    const assignedRole: UserRole = 'member';
-    const passwordHash = bcrypt.hashSync(password, 10);
-    const userId = `user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-
-    const newUser: DbUser = {
-      id: userId,
-      name: name.trim(),
-      email: normalizedEmail,
-      passwordHash,
-      role: assignedRole,
-      title: (typeof title === 'string' && title.trim()) || 'Sales Representative',
-      company: (typeof company === 'string' && company.trim()) || 'Nexus Global Software',
-      avatarUrl: (typeof avatarUrl === 'string' && avatarUrl.trim()) || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-      phone: typeof phone === 'string' ? phone.trim() : undefined,
-      department: typeof department === 'string' ? department.trim() : 'Sales Outbound',
-      bio: typeof bio === 'string' ? bio.trim() : 'Managing B2B outbound prospects.',
-      createdAt: new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-      failedLoginAttempts: 0,
-      lockedUntil: null
-    };
+    const newUser = result.user;
 
     usersDb.set(newUser.id, newUser);
 
@@ -502,6 +539,25 @@ async function startServer() {
   app.get('/api/team/members', requireAuth, (_req: AuthenticatedRequest, res: Response) => {
     const members = Array.from(usersDb.values()).map(sanitizeUser);
     res.json({ members });
+  });
+
+  /**
+   * POST /api/team/members
+   * RBAC Guarded: Administrators add a new member to the workspace.
+   * Unlike signup, this does NOT create a session, so the admin stays logged in.
+   */
+  app.post('/api/team/members', requireAuth, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+    const result = buildNewMember(req.body);
+    if (!result.user) {
+      res.status(result.status!).json({ error: result.error });
+      return;
+    }
+
+    usersDb.set(result.user.id, result.user);
+    res.status(201).json({
+      message: `Member "${result.user.name}" added to workspace.`,
+      member: sanitizeUser(result.user)
+    });
   });
 
   /**
@@ -632,6 +688,11 @@ Keep it punchy, professional, and directly relevant to B2B outbound lead generat
     }
   });
 
+  // Unknown API routes must return JSON 404 instead of falling through to the SPA HTML
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'API route not found.' });
+  });
+
   // --------------------------------------------------------------------------
   // VITE / STATIC SERVING
   // --------------------------------------------------------------------------
@@ -654,4 +715,7 @@ Keep it punchy, professional, and directly relevant to B2B outbound lead generat
   });
 }
 
-startServer();
+startServer().catch(err => {
+  console.error('Failed to start LeadPulse server:', err);
+  process.exit(1);
+});

@@ -23,7 +23,7 @@ import {
   UserPlus,
   FileSpreadsheet
 } from 'lucide-react';
-import { Lead, LeadStage, UserProfile } from '../types';
+import { Lead, LeadStage, OutreachSequence, UserProfile } from '../types';
 import { getCompanyWebsiteUrl, getGmailComposeUrl, getOutlookComposeUrl, getMailtoUrl } from '../utils/linkUtils';
 
 interface LeadTableProps {
@@ -37,6 +37,7 @@ interface LeadTableProps {
   onOpenEnrichModal: () => void;
   onOpenExcelImportModal?: () => void;
   currentUser?: UserProfile | null;
+  sequences?: OutreachSequence[];
 }
 
 const STAGE_CONFIG: Record<LeadStage, { label: string; bg: string; text: string; border: string }> = {
@@ -60,7 +61,8 @@ export const LeadTable: React.FC<LeadTableProps> = ({
   onRunDedup,
   onOpenEnrichModal,
   onOpenExcelImportModal,
-  currentUser
+  currentUser,
+  sequences = []
 }) => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [stageFilter, setStageFilter] = useState<string>('all');
@@ -74,10 +76,19 @@ export const LeadTable: React.FC<LeadTableProps> = ({
   // Filter leads
   const filteredLeads = leads.filter(lead => {
     if (stageFilter !== 'all' && lead.stage !== stageFilter) return false;
-    if (contactFilter === 'has_mobile' && !lead.phone && !lead.mobilePhone && !lead.directPhone && !lead.hqPhone) return false;
-    if (contactFilter === 'verified_email' && lead.emailStatus !== 'verified' && !lead.email) return false;
+    if (contactFilter === 'has_mobile' && !lead.mobilePhone && !(lead.phoneType === 'mobile' && lead.phone)) return false;
+    if (contactFilter === 'verified_email' && (lead.emailStatus !== 'verified' || !lead.email)) return false;
     return true;
   });
+
+  // Drop selections for leads that no longer exist (deleted / merged)
+  useEffect(() => {
+    const liveIds = new Set(leads.map(l => l.id));
+    setSelectedIds(prev => {
+      const next = prev.filter(id => liveIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [leads]);
 
   // Reset page when filter or total leads change
   useEffect(() => {
@@ -127,7 +138,7 @@ export const LeadTable: React.FC<LeadTableProps> = ({
 
   const copyToClipboard = (text: string, key: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(text);
+    navigator.clipboard?.writeText(text).catch(() => {});
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 1800);
   };
@@ -156,6 +167,8 @@ export const LeadTable: React.FC<LeadTableProps> = ({
             <option value="contacted">Contacted ({leads.filter(l => l.stage === 'contacted').length})</option>
             <option value="meeting_booked">Meeting Booked ({leads.filter(l => l.stage === 'meeting_booked').length})</option>
             <option value="qualified">Qualified ({leads.filter(l => l.stage === 'qualified').length})</option>
+            <option value="won">Closed Won ({leads.filter(l => l.stage === 'won').length})</option>
+            <option value="lost">Disqualified ({leads.filter(l => l.stage === 'lost').length})</option>
           </select>
 
           {/* Quick Contact Filter Pills */}
@@ -716,7 +729,7 @@ export const LeadTable: React.FC<LeadTableProps> = ({
                               {lead.sequenceName}
                             </span>
                             <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                              <span>Step {lead.sequenceStep || 1}/4</span>
+                              <span>Step {lead.sequenceStep || 1}/{sequences.find(s => s.id === lead.sequenceId)?.steps.length ?? '?'}</span>
                               <span className="text-slate-600">•</span>
                               <span className="capitalize text-emerald-400">{lead.sequenceStatus || 'active'}</span>
                             </div>
